@@ -18,117 +18,51 @@ declare(strict_types=1);
  * limitations under the License.
  */
 
-namespace JMS\TranslationBundle\Translation\Loader;
+namespace JMS\TranslationBundle\Translation\Loader\Symfony;
 
 use JMS\TranslationBundle\Exception\RuntimeException;
-use JMS\TranslationBundle\Model\FileSource;
-use JMS\TranslationBundle\Model\Message\XliffMessage as Message;
-use JMS\TranslationBundle\Model\MessageCatalogue;
+use Symfony\Component\Config\Resource\FileResource;
+use Symfony\Component\Translation\Loader\LoaderInterface;
+use Symfony\Component\Translation\MessageCatalogue;
 
+/**
+ * XLIFF loader.
+ *
+ * This loader replaces Symfony's default loader which uses the source element
+ * as the id whereas this loader uses the resname to conform to the XLIFF
+ * specification.
+ *
+ * @author Johannes M. Schmitt <schmittjoh@gmail.com>
+ */
 class XliffLoader implements LoaderInterface
 {
     /**
-     * @param mixed $resource
-     * @param string $locale
-     * @param string $domain
-     *
-     * @return MessageCatalogue
+     * {@inheritdoc}
      */
-    public function load($resource, $locale, $domain = 'messages')
+    public function load(mixed $resource, string $locale, string $domain = 'messages'): MessageCatalogue
     {
-        $previousErrors = libxml_use_internal_errors(true);
-        $previousEntities = $this->libxmlDisableEntityLoader(false);
-        if (false === $doc = simplexml_load_file((string) $resource)) {
-            libxml_use_internal_errors($previousErrors);
-            $this->libxmlDisableEntityLoader($previousEntities);
-            $libxmlError = libxml_get_last_error();
+        $previous = libxml_use_internal_errors(true);
+        if (false === $xml = simplexml_load_file((string) $resource)) {
+            libxml_use_internal_errors($previous);
+            $error = libxml_get_last_error();
 
-            throw new RuntimeException(sprintf('Could not load XML-file "%s": %s', $resource, $libxmlError->message));
+            throw new RuntimeException(sprintf('An error occurred while reading "%s": %s', $resource, $error->message));
         }
 
-        libxml_use_internal_errors($previousErrors);
-        $this->libxmlDisableEntityLoader($previousEntities);
+        libxml_use_internal_errors($previous);
 
-        $doc->registerXPathNamespace('xliff', 'urn:oasis:names:tc:xliff:document:1.2');
-        $doc->registerXPathNamespace('jms', 'urn:jms:translation');
+        $xml->registerXPathNamespace('xliff', 'urn:oasis:names:tc:xliff:document:1.2');
 
-        $hasReferenceFiles = in_array('urn:jms:translation', $doc->getNamespaces(true));
+        $catalogue = new MessageCatalogue($locale);
+        foreach ($xml->xpath('//xliff:trans-unit') as $translation) {
+            $resName = (string) $translation->attributes()->resname;
+            $id = $resName ?: (string) $translation->source;
 
-        $catalogue = new MessageCatalogue();
-        $catalogue->setLocale($locale);
-
-        foreach ($doc->xpath('//xliff:trans-unit') as $trans) {
-            \assert($trans instanceof \SimpleXMLElement);
-            $resName = (string) $trans->attributes()->resname;
-            $id = $resName ?: (string) $trans->source;
-
-            $m = Message::create($id, $domain)
-                    ->setDesc((string) $trans->source)
-                    ->setLocaleString((string) $trans->target);
-            \assert($m instanceof Message);
-
-            $m->setApproved((string) $trans['approved'] === 'yes');
-
-            if (isset($trans->target['state'])) {
-                $m->setState((string) $trans->target['state']);
-            }
-
-            // Create closure
-            $addNoteToMessage = static function (Message $m, $note) {
-                $m->addNote((string) $note, isset($note['from']) ? ((string) $note['from']) : null);
-            };
-
-            // If the translation has a note
-            if (isset($trans->note)) {
-                // If we have more than one note. We can't use is_array becuase $trans->note is a \SimpleXmlElement
-                if (count($trans->note) > 1) {
-                    foreach ($trans->note as $note) {
-                        $addNoteToMessage($m, $note);
-                    }
-                } else {
-                    $addNoteToMessage($m, $trans->note);
-                }
-            }
-
-            $catalogue->add($m);
-
-            if ($hasReferenceFiles) {
-                foreach ($trans->xpath('./jms:reference-file') as $file) {
-                    $line = (string) $file->attributes()->line;
-                    $column = (string) $file->attributes()->column;
-                    $m->addSource(new FileSource(
-                        (string) $file,
-                        $line ? (int) $line : null,
-                        $column ? (int) $column : null
-                    ));
-                }
-            }
-
-            if ($meaning = (string) $trans->attributes()->extradata) {
-                if (0 === strpos($meaning, 'Meaning: ')) {
-                    $meaning = substr($meaning, 9);
-                }
-
-                $m->setMeaning($meaning);
-            }
-
-            if (!($state = (string) $trans->target->attributes()->state) || 'new' !== $state) {
-                $m->setNew(false);
-            }
+            $catalogue->set($id, (string) $translation->target, $domain);
         }
+
+        $catalogue->addResource(new FileResource((string) $resource));
 
         return $catalogue;
-    }
-
-    /**
-     * Use libxml_disable_entity_loader only if it's not deprecated
-     */
-    private function libxmlDisableEntityLoader(bool $disable): bool
-    {
-        if (PHP_VERSION_ID >= 80000) {
-            return true;
-        }
-
-        return libxml_disable_entity_loader($disable);
     }
 }
