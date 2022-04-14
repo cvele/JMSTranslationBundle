@@ -46,14 +46,8 @@ class SymfonyLoaderAdapter implements LoaderInterface
     /**
      * Converts Symfony's message catalogue to the catalogue of this
      * bundle.
-     *
-     * @param mixed $resource
-     * @param string $locale
-     * @param string $domain
-     *
-     * @return MessageCatalogue
      */
-    public function load($resource, $locale, $domain = 'messages')
+    public function load(mixed $resource, string $locale, string $domain = 'messages'): MessageCatalogue
     {
         $catalogue = new MessageCatalogue();
         $catalogue->setLocale($locale);
